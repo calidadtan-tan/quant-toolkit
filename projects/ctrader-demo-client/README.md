@@ -10,17 +10,27 @@
 
 官方文件入口：<https://help.ctrader.com/open-api/>
 
-## 應用程式狀態（現在還不能換權杖）
+## 應用程式狀態
 
-Open API 應用程式名稱是 **poteto-demo-sltp**。Spotware 上的狀態是 **Submitted**，不是 **Active**。
+Open API 應用程式 **46950「加利達指揮中心」** 已是 **Active**。艦隊在同一台已授權的電腦上，用下面「艦隊交接／筆記簿 env」的檔案即可跑，不必再填 token。
 
-在 Spotware 把狀態改成 Active 之前：
+個人開發仍可依 `.env.example` 自建本地 `.env`。倉庫永不提交 `.env` 或任何 secret 值。單元測試只用假連線，沒有呼叫 Spotware。
 
-- OAuth 不會發出授權碼。
-- `CTRADER_ACCESS_TOKEN` 與 `CTRADER_REFRESH_TOKEN` 必須留空。
-- 不要把 Client ID、Client Secret 或權杖寫進程式碼，也不要提交 `.env`。
+## 艦隊交接／筆記簿 env
 
-啟用之後，再照下面的「授權並取得權杖」完成 OAuth。在那之前，用單元測試的假連線確認訊息形狀即可。本目錄沒有、也不該宣稱已經呼叫過 Spotware。
+只限 DEMO 登入號 `5360748`，主機 `demo.ctraderapi.com`。永不 Live。
+
+用戶已准：同一筆記簿（Windows `machineId` `75f422b2-7c1d-4d77-b6dd-f0a3185e7802`）上，新 bot 或例程接手時直接讀已交檔，無需再填 token：
+
+`C:\Users\calidad\AppData\Local\Temp\ctrader-demo-secure\ctrader-openapi-46950-demo.env`
+
+把該檔當成 dotenv／環境變數來源載入。變數名照 `.env.example`：`CTRADER_CLIENT_ID`、`CTRADER_CLIENT_SECRET`、`CTRADER_ACCESS_TOKEN`、`CTRADER_REFRESH_TOKEN`、`CTRADER_ACCOUNT_ID=5360748`、`CTRADER_HOST=demo.ctraderapi.com`。secret 值只留在該檔，不要寫進倉庫、README 或程式碼。
+
+本機 client 路徑（供 bot 執行，對應 repo 的 `projects/ctrader-demo-client`）：
+
+`C:\Users\calidad\Projects\quant-toolkit\projects\ctrader-demo-client`
+
+換機必須再問用戶准一次，才可把該 env 複製到新機的臨時安全路徑。不准擅自複製。
 
 ## 量化交易 bot 呼叫方式
 
@@ -112,7 +122,7 @@ OAuth 權杖交換使用固定網址 `https://openapi.ctrader.com/apps/token`。
 cp .env.example .env
 ```
 
-應用程式啟用之後，在 `.env` 填上 `CTRADER_CLIENT_ID`、`CTRADER_CLIENT_SECRET`，並保持：
+個人開發若要自建本地 `.env`，填上 `CTRADER_CLIENT_ID`、`CTRADER_CLIENT_SECRET`，並保持：
 
 ```text
 CTRADER_HOST=demo.ctraderapi.com
@@ -166,10 +176,10 @@ python3 -m ctrader_demo refresh-token
 
 | 變數 | 必填 | 說明 |
 | --- | --- | --- |
-| `CTRADER_CLIENT_ID` | 交易與換權杖時必填 | 應用程式 Client ID。啟用前留空，不要寫進程式 |
+| `CTRADER_CLIENT_ID` | 交易與換權杖時必填 | 應用程式 Client ID。不要寫進程式或 README |
 | `CTRADER_CLIENT_SECRET` | 交易與換權杖時必填 | 應用程式 Client Secret。同上 |
-| `CTRADER_ACCESS_TOKEN` | 讀持倉、改停損時必填 | OAuth access token。Submitted 期間不存在 |
-| `CTRADER_REFRESH_TOKEN` | 只在 `refresh-token` 必填 | OAuth refresh token。Submitted 期間不存在 |
+| `CTRADER_ACCESS_TOKEN` | 讀持倉、改停損、市價單、平倉時必填 | OAuth access token。艦隊用筆記簿 env，不要寫進倉庫 |
+| `CTRADER_REFRESH_TOKEN` | 只在 `refresh-token` 必填 | OAuth refresh token。同上 |
 | `CTRADER_ACCOUNT_ID` | 永遠必填 | DEMO 登入號 `traderLogin`，只能是 `5360748`。不是 `ctidTraderAccountId` |
 | `CTRADER_HOST` | 否 | 省略時為 `demo.ctraderapi.com`。其他值會被拒絕 |
 | `CTRADER_REDIRECT_URI` | 否 | 省略時為 `https://localhost`。其他值會被拒絕 |
@@ -244,7 +254,7 @@ python3 -m ctrader_demo amend-sl --position-id 123456789 --stop-loss 1.08000
 3. 把畫面上的浮動損益和 `grossUnrealizedPnL`、`netUnrealizedPnL` 比較。報價在兩次請求之間可能略有變動。`net` 不含預估平倉手續費，所以可能和畫面上的數字差一個手續費。
 4. 選一筆 DEMO 持倉，用 `amend-sl` 改成一個離市價夠遠、符合該商品規則的停損或停利。
 5. 回到 cTrader 重新整理該持倉，確認 Stop Loss / Take Profit 已改變。
-6. 不要對 Live 帳戶做這件事。若把 `CTRADER_HOST` 改掉，或把 `CTRADER_ACCOUNT_ID` 改成別的數字，程式會以代碼 `2` 結束，而且不會送出交易請求。應用程式仍是 Submitted 時，這一步要等 Active 與 OAuth 完成後才能在平台上核對。
+6. 不要對 Live 帳戶做這件事。若把 `CTRADER_HOST` 改掉，或把 `CTRADER_ACCOUNT_ID` 改成別的數字，程式會以代碼 `2` 結束，而且不會送出交易請求。只核對 DEMO 登入號 `5360748`。
 
 ## 結束代碼
 
@@ -264,7 +274,7 @@ python3 -m ctrader_demo amend-sl --position-id 123456789 --stop-loss 1.08000
 python3 -m unittest discover -s tests -t . -v
 ```
 
-測試檢查訊息形狀、金額縮放、授權順序，以及防護會在 `socket.create_connection` 之前返回。測試沒有連上 `demo.ctraderapi.com`。poteto-demo-sltp 仍是 Submitted，沒有權杖，不能也不應宣稱 API 呼叫已經成功。
+測試檢查訊息形狀、金額縮放、授權順序，以及防護會在 `socket.create_connection` 之前返回。測試沒有連上 `demo.ctraderapi.com`，也不能宣稱這次測試已經呼叫 Spotware。
 
 ## 為什麼不用 OpenApiPy
 
@@ -272,13 +282,15 @@ Spotware 的官方 Python SDK 是 [OpenApiPy](https://github.com/spotware/OpenAp
 
 訊息名稱與編號仍是官方 `ProtoOA*` 契約，對照 `openapi-proto-messages`。
 
-## 仍須由你提供的憑證
+## 憑證放哪裡
 
-程式庫不包含、也不會提交下列秘密。poteto-demo-sltp 仍是 Submitted，所以現在這些權杖還不存在，要等 Spotware 把應用程式設為 Active 之後才能做 OAuth：
+應用 **46950「加利達指揮中心」** 已 Active。艦隊在已授權的那台筆記簿上直接載入「艦隊交接／筆記簿 env」的檔案即可跑，不必再填 token。
+
+個人開發仍用 `.env.example` 複製成本地 `.env` 再自行填入。倉庫不包含、也不提交下列 secret：
 
 - `CTRADER_CLIENT_ID`
 - `CTRADER_CLIENT_SECRET`
 - `CTRADER_ACCESS_TOKEN`
 - `CTRADER_REFRESH_TOKEN`（刷新時需要；第一次可用授權碼交換）
 
-`CTRADER_ACCOUNT_ID` 必須維持 `5360748`（DEMO 登入號 `traderLogin`）。`CTRADER_HOST` 必須是 `demo.ctraderapi.com`。`CTRADER_REDIRECT_URI` 必須是 `https://localhost`。Open API 的 `ctidTraderAccountId` 由帳戶清單解析，不要把它填成 `5360748`。
+`CTRADER_ACCOUNT_ID` 必須維持 `5360748`（DEMO 登入號 `traderLogin`）。`CTRADER_HOST` 必須是 `demo.ctraderapi.com`。`CTRADER_REDIRECT_URI` 必須是 `https://localhost`。Open API 的 `ctidTraderAccountId` 由帳戶清單解析，不要把它填成 `5360748`。只 DEMO，永不 Live。
