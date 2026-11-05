@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+from ctrader_demo import amend_sltp, read_positions
 from ctrader_demo.cli import main
 from tests.support import FakeTransport, auth_responses, echo, env
 
@@ -76,10 +77,16 @@ class CliTests(unittest.TestCase):
             CTRADER_ACCESS_TOKEN="test-access-token",
         )
         self.assertEqual(code, 0, stderr)
+        self.assertEqual(stderr, "")
         payload = json.loads(stdout)
-        self.assertEqual(payload["accountId"], 5360748)
-        self.assertEqual(payload["host"], "demo.ctraderapi.com")
-        self.assertEqual(payload["positions"][0]["netUnrealizedPnL"], "2")
+        self.assertEqual(payload["code"], 0)
+        self.assertEqual(payload["message"], "ok")
+        self.assertTrue(payload["ok"])
+        self.assertIsNone(payload["error"])
+        self.assertEqual(payload["command"], "read-positions")
+        self.assertEqual(payload["result"]["accountId"], 5360748)
+        self.assertEqual(payload["result"]["host"], "demo.ctraderapi.com")
+        self.assertEqual(payload["result"]["positions"][0]["netUnrealizedPnL"], "2")
         self.assertEqual(transport.payload_types(), [2100, 2149, 2102, 2124, 2187])
         self.assertNotIn("test-client-secret", stdout)
 
@@ -87,7 +94,7 @@ class CliTests(unittest.TestCase):
         def factory():
             raise AssertionError("transport was constructed")
 
-        code, _stdout, stderr = _run(
+        code, stdout, stderr = _run(
             ["amend-sl", "--position-id", "10"],
             factory=factory,
             CTRADER_ACCOUNT_ID="5360748",
@@ -96,7 +103,12 @@ class CliTests(unittest.TestCase):
             CTRADER_ACCESS_TOKEN="token",
         )
         self.assertEqual(code, 1)
-        self.assertIn("ProtoOAAmendPositionSLTPReq", stderr)
+        self.assertEqual(stdout, stderr)
+        report = json.loads(stdout)
+        self.assertEqual(report["code"], 1)
+        self.assertEqual(report["error"], "USAGE")
+        self.assertFalse(report["ok"])
+        self.assertIn("ProtoOAAmendPositionSLTPReq", report["message"])
 
     def test_auth_url_refuses_non_demo_host_before_printing(self):
         code, stdout, stderr = _run(
@@ -106,8 +118,14 @@ class CliTests(unittest.TestCase):
             CTRADER_HOST="live.ctraderapi.com",
         )
         self.assertEqual(code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("DEMO GUARD", stderr)
+        self.assertEqual(stdout, stderr)
+        report = json.loads(stdout)
+        self.assertEqual(report["code"], 2)
+        self.assertEqual(report["error"], "DEMO_GUARD")
+        self.assertIn("message", report)
+        self.assertIn("DEMO GUARD", report["message"])
+        self.assertNotIn("id.ctrader.com", stdout)
+        self.assertNotIn("result", report)
 
     def test_example_env_has_empty_secrets_and_demo_binding(self):
         example = Path(__file__).resolve().parents[1] / ".env.example"
@@ -123,6 +141,35 @@ class CliTests(unittest.TestCase):
         gitignore = (example.parent / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".env\n", gitignore)
         self.assertIn("!.env.example", gitignore)
+
+    def test_module_entrypoints_return_the_same_report(self):
+        transport = FakeTransport(
+            auth_responses()
+            + [
+                echo(2125, {"ctidTraderAccountId": 5360748, "position": []}),
+                echo(2188, {"ctidTraderAccountId": 5360748, "moneyDigits": 2, "positionUnrealizedPnL": []}),
+            ]
+        )
+        with env(
+            CTRADER_ACCOUNT_ID="5360748",
+            CTRADER_CLIENT_ID="test-client-id",
+            CTRADER_CLIENT_SECRET="test-client-secret",
+            CTRADER_ACCESS_TOKEN="test-access-token",
+        ):
+            report = read_positions(transport_factory=lambda: transport)
+        self.assertEqual(report["code"], 0)
+        self.assertEqual(report["message"], "ok")
+        self.assertEqual(report["result"]["positionCount"], 0)
+        self.assertEqual(transport.payload_types(), [2100, 2149, 2102, 2124, 2187])
+
+        def factory():
+            raise AssertionError("transport was constructed")
+
+        with env(CTRADER_ACCOUNT_ID="1", CTRADER_HOST="demo.ctraderapi.com"):
+            denied = amend_sltp(10, stop_loss=1.1, transport_factory=factory)
+        self.assertEqual(denied["code"], 2)
+        self.assertEqual(denied["error"], "DEMO_GUARD")
+        self.assertIn("5360748", denied["message"])
 
 
 if __name__ == "__main__":

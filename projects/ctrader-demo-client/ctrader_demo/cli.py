@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 
 from ctrader_demo.config import enforce_demo_env, load_trading_config, optional_env
 from ctrader_demo.constants import (
@@ -17,7 +15,8 @@ from ctrader_demo.constants import (
     OPEN_API_APP_NAME,
     OPEN_API_APP_STATUS,
 )
-from ctrader_demo.errors import ApiError, ConfigError, DemoGuardError
+from ctrader_demo.errors import ApiError, ConfigError, DemoGuardError, UsageError
+from ctrader_demo.report import emit_report, failure_report, success_report
 from ctrader_demo.oauth import (
     assert_public_redirect,
     build_authorize_url,
@@ -29,8 +28,15 @@ from ctrader_demo.session import DemoClient
 from ctrader_demo.transport import SslWebSocketTransport
 
 
+class BotArgumentParser(argparse.ArgumentParser):
+    """Raise UsageError instead of printing text and calling sys.exit."""
+
+    def error(self, message: str) -> None:
+        raise UsageError(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = BotArgumentParser(
         prog="python -m ctrader_demo",
         description="DEMO-only cTrader Open API client for account 5360748 on demo.ctraderapi.com.",
     )
@@ -58,11 +64,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_json(payload: dict) -> None:
-    json.dump(payload, sys.stdout, indent=2, sort_keys=True, ensure_ascii=False)
-    sys.stdout.write("\n")
-
-
 def _redirect(explicit: str | None) -> str:
     value = (explicit or optional_env(ENV_REDIRECT_URI) or ALLOWED_REDIRECT_URI).strip()
     return assert_public_redirect(value)
@@ -78,13 +79,10 @@ def _cmd_auth_url(args: argparse.Namespace) -> int:
         )
     redirect_uri = _redirect(args.redirect_uri)
     url = build_authorize_url(client_id=client_id, redirect_uri=redirect_uri, scope=args.scope)
-    sys.stdout.write(url + "\n")
+    result = {"url": url}
     if args.scope == "accounts":
-        print(
-            "warning: scope=accounts cannot amend stop loss. Use scope=trading for amend-sl.",
-            file=sys.stderr,
-        )
-    return 0
+        result["warning"] = "scope=accounts cannot amend stop loss. Use scope=trading for amend-sl."
+    return result
 
 
 def _cmd_exchange(args: argparse.Namespace, *, urlopen) -> int:
@@ -102,13 +100,12 @@ def _cmd_exchange(args: argparse.Namespace, *, urlopen) -> int:
         code=code,
         redirect_uri=_redirect(args.redirect_uri),
     )
-    _print_json(fetch_token(request, urlopen=urlopen))
-    print(
-        "Store accessToken and refreshToken in the gitignored .env as "
-        f"{ENV_ACCESS_TOKEN} and {ENV_REFRESH_TOKEN}. Do not commit them.",
-        file=sys.stderr,
+    tokens = fetch_token(request, urlopen=urlopen)
+    tokens["hint"] = (
+        f"Store accessToken and refreshToken in the gitignored .env as {ENV_ACCESS_TOKEN} and "
+        f"{ENV_REFRESH_TOKEN}. Do not commit them."
     )
-    return 0
+    return tokens
 
 
 def _cmd_refresh(*, urlopen) -> int:
@@ -118,13 +115,12 @@ def _cmd_refresh(*, urlopen) -> int:
         client_secret=_env_required(ENV_CLIENT_SECRET),
         refresh_token=_env_required(ENV_REFRESH_TOKEN),
     )
-    _print_json(fetch_token(request, urlopen=urlopen))
-    print(
+    tokens = fetch_token(request, urlopen=urlopen)
+    tokens["hint"] = (
         f"Replace {ENV_ACCESS_TOKEN} and {ENV_REFRESH_TOKEN} with these new values. "
-        "The previous pair is invalidated. Do not commit them.",
-        file=sys.stderr,
+        "The previous pair is invalidated. Do not commit them."
     )
-    return 0
+    return tokens
 
 
 def _env_required(name: str) -> str:
@@ -147,45 +143,56 @@ def _validate_amend(args: argparse.Namespace) -> None:
         )
 
 
-def main(argv: list[str] | None = None, *, transport_factory=SslWebSocketTransport, urlopen=secure_urlopen) -> int:
-    parser = build_parser()
+def execute(argv: list[str] | None = None, *, transport_factory=SslWebSocketTransport, urlopen=secure_urlopen) -> dict:
+    """Run one command and return the report dict. Does not print."""
+
+    command: str | None = None
     try:
-        args = parser.parse_args(argv)
+        args = build_parser().parse_args(argv)
+        command = args.command
         enforce_demo_env()
         if args.command == "auth-url":
-            return _cmd_auth_url(args)
-        if args.command == "exchange-code":
-            return _cmd_exchange(args, urlopen=urlopen)
-        if args.command == "refresh-token":
-            return _cmd_refresh(urlopen=urlopen)
-        config = load_trading_config()
-        if args.command == "amend-sl":
-            _validate_amend(args)
-        transport = transport_factory()
-        client = DemoClient(config, transport)
-        try:
-            client.connect()
-            client.authorize()
-            if args.command == "read-positions":
-                result = client.read_positions()
-            elif args.command == "amend-sl":
-                result = client.amend_sltp(
-                    position_id=args.position_id,
-                    stop_loss=args.stop_loss,
-                    take_profit=args.take_profit,
-                )
-            else:
-                raise ConfigError(f"Unknown command {args.command}")
-        finally:
-            client.close()
-        _print_json(result)
-        return 0
+            result = _cmd_auth_url(args)
+        elif args.command == "exchange-code":
+            result = _cmd_exchange(args, urlopen=urlopen)
+        elif args.command == "refresh-token":
+            result = _cmd_refresh(urlopen=urlopen)
+        else:
+            config = load_trading_config()
+            if args.command == "amend-sl":
+                _validate_amend(args)
+            transport = transport_factory()
+            client = DemoClient(config, transport)
+            try:
+                client.connect()
+                client.authorize()
+                if args.command == "read-positions":
+                    result = client.read_positions()
+                elif args.command == "amend-sl":
+                    result = client.amend_sltp(
+                        position_id=args.position_id,
+                        stop_loss=args.stop_loss,
+                        take_profit=args.take_profit,
+                    )
+                else:
+                    raise ConfigError(f"Unknown command {args.command}")
+            finally:
+                client.close()
+        return success_report(command, result)
     except DemoGuardError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    except (ConfigError, ApiError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return failure_report(2, "DEMO_GUARD", str(exc), command)
+    except ConfigError as exc:
+        return failure_report(1, "CONFIG", str(exc), command)
+    except ApiError as exc:
+        return failure_report(1, "API", str(exc), command)
+    except (UsageError, ValueError) as exc:
+        return failure_report(1, "USAGE", str(exc), command)
+    except Exception as exc:
+        return failure_report(1, "INTERNAL", str(exc), command)
+
+
+def main(argv: list[str] | None = None, *, transport_factory=SslWebSocketTransport, urlopen=secure_urlopen) -> int:
+    return emit_report(execute(argv, transport_factory=transport_factory, urlopen=urlopen))
 
 
 def console_main() -> None:

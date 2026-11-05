@@ -16,6 +16,10 @@ class ConfigError(CTraderDemoError):
     """Required configuration is missing or unusable."""
 
 
+class UsageError(CTraderDemoError):
+    """The command line is missing a required flag or subcommand."""
+
+
 class ApiError(CTraderDemoError):
     """The proxy returned an error, or the response could not be used."""
 

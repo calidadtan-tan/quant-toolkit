@@ -22,6 +22,46 @@ Open API 應用程式名稱是 **poteto-demo-sltp**。Spotware 上的狀態是 *
 
 啟用之後，再照下面的「授權並取得權杖」完成 OAuth。在那之前，用單元測試的假連線確認訊息形狀即可。本目錄沒有、也不該宣稱已經呼叫過 Spotware。
 
+## 量化交易 bot 呼叫方式
+
+在 `projects/ctrader-demo-client` 目錄執行。兩種入口回傳同一份報告。
+
+命令：
+
+```bash
+python3 -m ctrader_demo read-positions
+python3 -m ctrader_demo amend-sl --position-id 123456789 --stop-loss 1.08000 --take-profit 1.12000
+```
+
+程式進入點（不印出，直接回傳 dict）：
+
+```python
+from ctrader_demo import read_positions, amend_sltp
+
+report = read_positions()
+report = amend_sltp(123456789, stop_loss=1.08, take_profit=1.12)
+```
+
+`ctrader_demo.cli:main` 與 `python3 -m ctrader_demo` 相同。成功時 stdout 是一行 JSON，stderr 為空。失敗時 stdout 與 stderr 是同一行 JSON。bot 解析 `code` 與 `message` 即可。
+
+成功：
+
+```json
+{"code":0,"command":"read-positions","error":null,"message":"ok","ok":true,"result":{}}
+```
+
+失敗（live 主機或其他帳戶；此時還沒有交易請求）：
+
+```json
+{"code":2,"command":"read-positions","error":"DEMO_GUARD","message":"DEMO GUARD: refusing host 'live.ctraderapi.com'. ...","ok":false}
+```
+
+| `code` | `error` | 意義 |
+| --- | --- | --- |
+| 0 | `null` | 成功。持倉與損益在 `result` |
+| 1 | `CONFIG` / `API` / `USAGE` / `INTERNAL` | 設定不足、參數錯誤，或代理回傳錯誤。不代表改單已成功 |
+| 2 | `DEMO_GUARD` | 主機不是 `demo.ctraderapi.com`，或帳戶不是 `5360748`。請求沒有送出 |
+
 ## 硬性限制
 
 程式在送出任何交易請求之前就會檢查。不符合就結束，結束代碼是 `2`，且不會建立交易連線。
@@ -199,13 +239,13 @@ python3 -m ctrader_demo amend-sl --position-id 123456789 --stop-loss 1.08000
 
 ## 結束代碼
 
-| 代碼 | 意義 |
-| --- | --- |
-| 0 | 指令完成，標準輸出是 JSON |
-| 1 | 設定不足，或代理回傳錯誤。不代表交易已經成功 |
-| 2 | DEMO 防護拒絕（主機、連接埠、帳戶、Live 旗標、view-only 卻要改停損） |
+程序的結束代碼等於報告裡的 `code`。stdout 永遠是一行 JSON。失敗時 stderr 是同一行，方便另一個 bot 只讀 stderr。權杖與 client secret 若出現在 `message` 裡會被換成 `***`。
 
-標準錯誤會印出原因。權杖與 client secret 若出現在錯誤文字裡會被換成 `***`。
+| `code` | 意義 |
+| --- | --- |
+| 0 | 指令完成。`result` 是持倉或改單結果 |
+| 1 | 設定不足、參數錯誤，或代理回傳錯誤。不代表交易已經成功 |
+| 2 | DEMO 防護拒絕（主機、帳戶、Live 旗標、view-only 卻要改停損）。交易請求沒有送出 |
 
 ## 測試
 
