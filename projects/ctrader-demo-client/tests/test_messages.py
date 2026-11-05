@@ -8,6 +8,8 @@ from ctrader_demo.errors import ApiError, DemoGuardError
 from ctrader_demo.messages import (
     build_account_auth_req,
     build_amend_position_sltp_req,
+    build_close_position_req,
+    build_market_order_req,
     build_application_auth_req,
     build_reconcile_req,
     build_unrealized_pnl_req,
@@ -80,6 +82,55 @@ class MessageShapeTests(unittest.TestCase):
         )
         self.assertNotIn("guaranteedStopLoss", message["payload"])
         self.assertNotIn("account_id", inspect.signature(build_amend_position_sltp_req).parameters)
+
+    def test_market_order_and_close_shapes(self):
+        order = build_market_order_req(
+            ctid_trader_account_id=CTID,
+            symbol_id=7,
+            side="buy",
+            volume=1000,
+            stop_loss=1.08,
+            take_profit=1.12,
+            label="demo",
+            client_msg_id="mkt-1",
+        )
+        self.assertEqual(
+            order,
+            {
+                "clientMsgId": "mkt-1",
+                "payloadType": 2106,
+                "payload": {
+                    "ctidTraderAccountId": CTID,
+                    "symbolId": 7,
+                    "orderType": 1,
+                    "tradeSide": 1,
+                    "volume": 1000,
+                    "stopLoss": 1.08,
+                    "takeProfit": 1.12,
+                    "label": "demo",
+                },
+            },
+        )
+        self.assertNotIn("limitPrice", order["payload"])
+        self.assertNotIn("stopPrice", order["payload"])
+        close = build_close_position_req(
+            ctid_trader_account_id=CTID,
+            position_id=10,
+            volume=1000,
+            client_msg_id="cls-1",
+        )
+        self.assertEqual(
+            close,
+            {
+                "clientMsgId": "cls-1",
+                "payloadType": 2111,
+                "payload": {"ctidTraderAccountId": CTID, "positionId": 10, "volume": 1000},
+            },
+        )
+        with self.assertRaises(ValueError):
+            build_market_order_req(ctid_trader_account_id=CTID, symbol_id=7, side="LIMIT", volume=1000)
+        with self.assertRaises(ValueError):
+            build_market_order_req(ctid_trader_account_id=CTID, symbol_id=7, side="BUY", volume=0)
 
     def test_amend_can_send_only_one_price(self):
         only_sl = build_amend_position_sltp_req(

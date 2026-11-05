@@ -62,25 +62,64 @@ class GuardTests(unittest.TestCase):
                     PayloadType.APPLICATION_AUTH_REQ,
                     PayloadType.ACCOUNT_AUTH_REQ,
                     PayloadType.GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ,
+                    PayloadType.NEW_ORDER_REQ,
                     PayloadType.RECONCILE_REQ,
                     PayloadType.GET_POSITION_UNREALIZED_PNL_REQ,
                     PayloadType.AMEND_POSITION_SLTP_REQ,
+                    PayloadType.CLOSE_POSITION_REQ,
                 }
             ),
         )
         blocked = {
-            PayloadType.NEW_ORDER_REQ: {},
-            PayloadType.CANCEL_ORDER_REQ: {"ctidTraderAccountId": 5360748, "orderId": 1},
-            PayloadType.AMEND_ORDER_REQ: {"ctidTraderAccountId": 5360748},
-            PayloadType.CLOSE_POSITION_REQ: {"ctidTraderAccountId": 5360748, "positionId": 1},
+            PayloadType.CANCEL_ORDER_REQ: {"ctidTraderAccountId": 49216463, "orderId": 1},
+            PayloadType.AMEND_ORDER_REQ: {"ctidTraderAccountId": 49216463},
         }
         for payload_type, payload in blocked.items():
             with self.subTest(payload_type=payload_type):
                 with self.assertRaises(DemoGuardError):
                     guard_outgoing_envelope(
                         {"clientMsgId": "x", "payloadType": payload_type, "payload": payload},
-                        resolved_ctid=None,
+                        resolved_ctid=49216463,
                     )
+        guard_outgoing_envelope(
+            {
+                "clientMsgId": "x",
+                "payloadType": PayloadType.NEW_ORDER_REQ,
+                "payload": {
+                    "ctidTraderAccountId": 49216463,
+                    "symbolId": 1,
+                    "orderType": 1,
+                    "tradeSide": 1,
+                    "volume": 1000,
+                },
+            },
+            resolved_ctid=49216463,
+        )
+        with self.assertRaises(DemoGuardError) as caught:
+            guard_outgoing_envelope(
+                {
+                    "clientMsgId": "x",
+                    "payloadType": PayloadType.NEW_ORDER_REQ,
+                    "payload": {
+                        "ctidTraderAccountId": 49216463,
+                        "symbolId": 1,
+                        "orderType": 2,
+                        "tradeSide": "BUY",
+                        "volume": 1000,
+                        "limitPrice": 1.2,
+                    },
+                },
+                resolved_ctid=49216463,
+            )
+        self.assertIn("non-market", str(caught.exception))
+        guard_outgoing_envelope(
+            {
+                "clientMsgId": "x",
+                "payloadType": PayloadType.CLOSE_POSITION_REQ,
+                "payload": {"ctidTraderAccountId": 49216463, "positionId": 10, "volume": 1000},
+            },
+            resolved_ctid=49216463,
+        )
 
     def test_amend_for_other_account_refused(self):
         resolved = 49216463

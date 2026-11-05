@@ -10,6 +10,10 @@ from ctrader_demo.constants import (
     ALLOWED_TRADER_LOGIN,
     FORBIDDEN_HOST_MARKERS,
     LOGIN_FIELD_NAMES,
+    MARKET_ORDER_TYPES,
+    NON_MARKET_ORDER_FIELDS,
+    TRADE_SIDE_VALUES,
+    PayloadType,
 )
 from ctrader_demo.errors import DemoGuardError
 
@@ -168,7 +172,8 @@ def guard_outgoing_envelope(envelope: dict, *, resolved_ctid: int | None) -> Non
         raise DemoGuardError(
             f"DEMO GUARD: refusing payloadType {payload_type}. "
             "This client may only authorize, read positions, read floating P&L, "
-            f"and send ProtoOAAmendPositionSLTPReq (2110) for DEMO trader login {ALLOWED_TRADER_LOGIN}."
+            "send a MARKET ProtoOANewOrderReq (2106), ProtoOAClosePositionReq (2111), "
+            f"and ProtoOAAmendPositionSLTPReq (2110) for DEMO trader login {ALLOWED_TRADER_LOGIN}."
         )
     payload = envelope.get("payload") or {}
     if not isinstance(payload, dict):
@@ -184,3 +189,43 @@ def guard_outgoing_envelope(envelope: dict, *, resolved_ctid: int | None) -> Non
                 f"DEMO GUARD: payloadType {payload_type} is missing ctidTraderAccountId."
             )
         assert_resolved_ctid(payload["ctidTraderAccountId"], resolved_ctid)
+    if payload_type == PayloadType.NEW_ORDER_REQ:
+        _guard_market_order(payload)
+    elif payload_type == PayloadType.CLOSE_POSITION_REQ:
+        _guard_close_position(payload)
+
+
+def _guard_market_order(payload: dict) -> None:
+    order_type = payload.get("orderType")
+    if order_type not in MARKET_ORDER_TYPES:
+        raise DemoGuardError(
+            "DEMO GUARD: refusing non-market ProtoOANewOrderReq. "
+            f"orderType {order_type!r} is not MARKET. Limit, stop, and stop-limit orders are not sent."
+        )
+    present = NON_MARKET_ORDER_FIELDS.intersection(payload)
+    if present:
+        names = ", ".join(sorted(present))
+        raise DemoGuardError(
+            f"DEMO GUARD: refusing ProtoOANewOrderReq field(s) {names}. Only market orders are sent."
+        )
+    if payload.get("tradeSide") not in TRADE_SIDE_VALUES:
+        raise DemoGuardError(
+            f"DEMO GUARD: refusing tradeSide {payload.get('tradeSide')!r}. Only BUY or SELL market orders are sent."
+        )
+    volume = payload.get("volume")
+    if isinstance(volume, bool) or not isinstance(volume, int) or volume <= 0:
+        raise DemoGuardError(
+            "DEMO GUARD: market order volume must be a positive API volume integer "
+            "(1000 means 10.00 units)."
+        )
+
+
+def _guard_close_position(payload: dict) -> None:
+    position_id = payload.get("positionId")
+    volume = payload.get("volume")
+    if isinstance(position_id, bool) or not isinstance(position_id, int) or position_id <= 0:
+        raise DemoGuardError("DEMO GUARD: close positionId must be a positive integer.")
+    if isinstance(volume, bool) or not isinstance(volume, int) or volume <= 0:
+        raise DemoGuardError(
+            "DEMO GUARD: close volume must be a positive API volume integer (1000 means 10.00 units)."
+        )

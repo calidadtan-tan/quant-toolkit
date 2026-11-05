@@ -16,6 +16,9 @@ from ctrader_demo.constants import (
     ALLOWED_HOST,
     ALLOWED_TRADER_LOGIN,
     DEMO_WEBSOCKET_URL,
+    ORDER_TYPE_MARKET,
+    TRADE_SIDE_BUY,
+    TRADE_SIDE_SELL,
     EXECUTION_TYPE_NAMES,
     OPEN_POSITION_STATUSES,
     POSITION_STATUS_NAMES,
@@ -108,6 +111,36 @@ def require_position_id(value: int) -> int:
     return value
 
 
+def require_volume(value: int) -> int:
+    """API volume: 1000 means 10.00 units (volume is counted in 0.01 of a unit)."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            "volume must be a positive API volume integer. 1000 means 10.00 units."
+        )
+    return value
+
+
+def require_side(side: str) -> int:
+    text = str(side).strip().upper()
+    if text == "BUY":
+        return TRADE_SIDE_BUY
+    if text == "SELL":
+        return TRADE_SIDE_SELL
+    raise ValueError("side must be BUY or SELL. Limit, stop, and stop-limit orders are not sent.")
+
+
+def require_label(label: str | None) -> str | None:
+    if label is None:
+        return None
+    if not isinstance(label, str):
+        raise ValueError("label must be a string of at most 100 characters.")
+    text = label.strip()
+    if not text or len(text) > 100:
+        raise ValueError("label must be a string of 1 to 100 characters.")
+    return text
+
+
 def require_price(name: str, value: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a positive number")
@@ -145,6 +178,68 @@ def build_amend_position_sltp_req(
     if take_profit is not None:
         payload["takeProfit"] = require_price("takeProfit", take_profit)
     return envelope(PayloadType.AMEND_POSITION_SLTP_REQ, payload, client_msg_id)
+
+
+def build_market_order_req(
+    *,
+    ctid_trader_account_id: int,
+    symbol_id: int,
+    side: str,
+    volume: int,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    label: str | None = None,
+    client_msg_id: str | None = None,
+) -> JsonObject:
+    """``ProtoOANewOrderReq`` with ``orderType`` MARKET (payloadType 2106).
+
+    ``volume`` is the API volume: 1000 means 10.00 units. Absolute ``stopLoss`` and
+    ``takeProfit`` are optional. The official proto marks them unsupported on MARKET
+    orders; if the proxy rejects them the execution event is an API error, not a guard.
+    Pending-order fields are never set.
+    """
+
+    if isinstance(symbol_id, bool) or not isinstance(symbol_id, int) or symbol_id <= 0:
+        raise ValueError("symbolId must be a positive integer")
+    payload: JsonObject = {
+        "ctidTraderAccountId": require_ctid(ctid_trader_account_id),
+        "symbolId": symbol_id,
+        "orderType": ORDER_TYPE_MARKET,
+        "tradeSide": require_side(side),
+        "volume": require_volume(volume),
+    }
+    if stop_loss is not None:
+        payload["stopLoss"] = require_price("stopLoss", stop_loss)
+    if take_profit is not None:
+        payload["takeProfit"] = require_price("takeProfit", take_profit)
+    clean_label = require_label(label)
+    if clean_label is not None:
+        payload["label"] = clean_label
+    return envelope(PayloadType.NEW_ORDER_REQ, payload, client_msg_id)
+
+
+def build_close_position_req(
+    *,
+    ctid_trader_account_id: int,
+    position_id: int,
+    volume: int,
+    client_msg_id: str | None = None,
+) -> JsonObject:
+    """``ProtoOAClosePositionReq`` (payloadType 2111).
+
+    ``volume`` is the API volume to close. 1000 means 10.00 units. Omit nothing here:
+    the session fills the open position's volume when the caller asks for a full close.
+    """
+
+    return envelope(
+        PayloadType.CLOSE_POSITION_REQ,
+        {
+            "ctidTraderAccountId": require_ctid(ctid_trader_account_id),
+            "positionId": require_position_id(position_id),
+            "volume": require_volume(volume),
+        },
+        client_msg_id,
+    )
 
 
 def as_list(value: Any) -> list[Any]:
@@ -313,5 +408,34 @@ def parse_amend_execution(
         "executionType": name,
         "stopLoss": position.get("stopLoss"),
         "takeProfit": position.get("takeProfit"),
+        "errorCode": None,
+    }
+
+
+def parse_trade_execution(message: JsonObject, *, expected_ctid: int) -> JsonObject:
+    """Read a ``ProtoOAExecutionEvent`` for a market order or a close."""
+
+    payload = message.get("payload") or {}
+    ctid = assert_resolved_ctid(payload.get("ctidTraderAccountId"), expected_ctid)
+    name = execution_name(payload.get("executionType"))
+    error_code = payload.get("errorCode") or None
+    if error_code or name in REJECTED_EXECUTION_TYPES:
+        detail = str(payload.get("description") or error_code or name)
+        raise ApiError(str(error_code or name), detail, PayloadType.EXECUTION_EVENT)
+    position = payload.get("position") or {}
+    order = payload.get("order") or {}
+    trade = order.get("tradeData") or position.get("tradeData") or {}
+    position_id = position.get("positionId", order.get("positionId"))
+    order_id = order.get("orderId")
+    return {
+        **_bound_account(ctid),
+        "positionId": None if position_id is None else int(position_id),
+        "orderId": None if order_id is None else int(order_id),
+        "executionType": name,
+        "symbolId": None if trade.get("symbolId") is None else int(trade["symbolId"]),
+        "tradeSide": enum_name(trade.get("tradeSide"), TRADE_SIDE_NAMES),
+        "volume": None if trade.get("volume") is None else int(trade["volume"]),
+        "stopLoss": position.get("stopLoss", order.get("stopLoss")),
+        "takeProfit": position.get("takeProfit", order.get("takeProfit")),
         "errorCode": None,
     }

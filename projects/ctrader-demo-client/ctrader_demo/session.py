@@ -29,10 +29,13 @@ from ctrader_demo.messages import (
     build_account_list_req,
     build_amend_position_sltp_req,
     build_application_auth_req,
+    build_close_position_req,
+    build_market_order_req,
     build_reconcile_req,
     build_unrealized_pnl_req,
     normalize_open_positions,
     parse_amend_execution,
+    parse_trade_execution,
 )
 
 JsonObject = dict[str, Any]
@@ -146,12 +149,102 @@ class DemoClient:
         )
         return normalize_open_positions(reconcile, pnl, expected_ctid=ctid)
 
-    def amend_sltp(self, *, position_id: int, stop_loss: float | None, take_profit: float | None) -> JsonObject:
+    def _require_trade_scope(self, request_name: str) -> None:
         if self.permission_scope in VIEW_ONLY_SCOPES:
             raise DemoGuardError(
                 "DEMO GUARD: access token scope is view-only (accounts). "
-                "Refusing to send ProtoOAAmendPositionSLTPReq. Re-authorize with scope=trading."
+                f"Refusing to send {request_name}. Re-authorize with scope=trading."
             )
+
+    def open_market(
+        self,
+        *,
+        symbol_id: int,
+        side: str,
+        volume: int,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        label: str | None = None,
+    ) -> JsonObject:
+        self._require_trade_scope("ProtoOANewOrderReq")
+        ctid = self._require_ctid()
+        event = self.request(
+            build_market_order_req(
+                ctid_trader_account_id=ctid,
+                symbol_id=symbol_id,
+                side=side,
+                volume=volume,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                label=label,
+            ),
+            expect={PayloadType.EXECUTION_EVENT},
+            require_account=True,
+        )
+        return parse_trade_execution(event, expected_ctid=ctid)
+
+    def close_position(self, *, position_id: int, volume: int | None = None) -> JsonObject:
+        self._require_trade_scope("ProtoOAClosePositionReq")
+        ctid = self._require_ctid()
+        close_volume = self._close_volume(position_id, volume)
+        event = self.request(
+            build_close_position_req(
+                ctid_trader_account_id=ctid,
+                position_id=position_id,
+                volume=close_volume,
+            ),
+            expect={PayloadType.EXECUTION_EVENT},
+            require_account=True,
+        )
+        return parse_trade_execution(event, expected_ctid=ctid)
+
+    def _close_volume(self, position_id: int, volume: int | None) -> int:
+        """Use the open position volume when the caller asks for a full close."""
+
+        ctid = self._require_ctid()
+        reconcile = self.request(
+            build_reconcile_req(ctid),
+            expect={PayloadType.RECONCILE_RES},
+            require_account=True,
+        )
+        payload = reconcile.get("payload") or {}
+        for raw in as_list(payload.get("position")):
+            if not isinstance(raw, dict) or raw.get("positionId") is None:
+                continue
+            if int(raw["positionId"]) != int(position_id):
+                continue
+            status = raw.get("positionStatus")
+            if isinstance(status, bool):
+                open_status = False
+            elif isinstance(status, str) and status.isdigit():
+                open_status = int(status) == 1
+            else:
+                open_status = status in {1, "POSITION_STATUS_OPEN", "OPEN"}
+            if not open_status:
+                raise ValueError(
+                    f"positionId {position_id} is not open. Refusing to send ProtoOAClosePositionReq."
+                )
+            open_volume = (raw.get("tradeData") or {}).get("volume")
+            if isinstance(open_volume, bool) or not isinstance(open_volume, int) or open_volume <= 0:
+                raise ValueError(
+                    f"positionId {position_id} has no API volume. Refusing to send ProtoOAClosePositionReq."
+                )
+            if volume is None:
+                return open_volume
+            requested = volume if isinstance(volume, int) and not isinstance(volume, bool) else None
+            if requested is None or requested <= 0:
+                raise ValueError("volume must be a positive API volume integer. 1000 means 10.00 units.")
+            if requested > open_volume:
+                raise ValueError(
+                    f"Refusing to close volume {requested}; open volume is {open_volume} API units."
+                )
+            return requested
+        raise ValueError(
+            f"positionId {position_id} was not in open positions. Refusing to send ProtoOAClosePositionReq."
+        )
+
+    def amend_sltp(self, *, position_id: int, stop_loss: float | None, take_profit: float | None) -> JsonObject:
+        self._require_trade_scope("ProtoOAAmendPositionSLTPReq")
         ctid = self._require_ctid()
         envelope = build_amend_position_sltp_req(
             ctid_trader_account_id=ctid,

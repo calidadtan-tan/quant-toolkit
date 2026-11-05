@@ -204,6 +204,145 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(result["executionType"], "ORDER_ACCEPTED")
         self.assertEqual(result["positionId"], 10)
 
+    def test_open_market_sends_only_market_on_resolved_ctid(self):
+        transport = FakeTransport(
+            auth_responses()
+            + [
+                echo(
+                    2126,
+                    {
+                        "ctidTraderAccountId": 49216463,
+                        "executionType": 3,
+                        "position": {
+                            "positionId": 77,
+                            "stopLoss": 1.08,
+                            "takeProfit": 1.12,
+                            "tradeData": {"symbolId": 7, "volume": 1000, "tradeSide": 1},
+                        },
+                        "order": {
+                            "orderId": 88,
+                            "tradeData": {"symbolId": 7, "volume": 1000, "tradeSide": 1},
+                        },
+                    },
+                )
+            ]
+        )
+        client = DemoClient(trading_config(), transport)
+        client.connect()
+        client.authorize()
+        result = client.open_market(
+            symbol_id=7,
+            side="SELL",
+            volume=1000,
+            stop_loss=1.08,
+            take_profit=1.12,
+            label="demo",
+        )
+        order = transport.sent[-1]
+        self.assertEqual(order["payloadType"], 2106)
+        self.assertEqual(
+            order["payload"],
+            {
+                "ctidTraderAccountId": 49216463,
+                "symbolId": 7,
+                "orderType": 1,
+                "tradeSide": 2,
+                "volume": 1000,
+                "stopLoss": 1.08,
+                "takeProfit": 1.12,
+                "label": "demo",
+            },
+        )
+        self.assertEqual(result["positionId"], 77)
+        self.assertEqual(result["orderId"], 88)
+        self.assertEqual(result["executionType"], "ORDER_FILLED")
+        self.assertNotIn(2108, transport.payload_types())
+        self.assertNotIn(2109, transport.payload_types())
+
+    def test_close_position_defaults_to_full_open_volume(self):
+        transport = FakeTransport(
+            auth_responses()
+            + [
+                echo(
+                    2125,
+                    {
+                        "ctidTraderAccountId": 49216463,
+                        "position": [
+                            {
+                                "positionId": 10,
+                                "positionStatus": 1,
+                                "tradeData": {"symbolId": 1, "volume": 1000, "tradeSide": 1},
+                            }
+                        ],
+                    },
+                ),
+                echo(
+                    2126,
+                    {
+                        "ctidTraderAccountId": 49216463,
+                        "executionType": 3,
+                        "position": {"positionId": 10, "tradeData": {"symbolId": 1, "volume": 1000, "tradeSide": 1}},
+                    },
+                ),
+            ]
+        )
+        client = DemoClient(trading_config(), transport)
+        client.connect()
+        client.authorize()
+        result = client.close_position(position_id=10)
+        close = transport.sent[-1]
+        self.assertEqual(close["payloadType"], 2111)
+        self.assertEqual(
+            close["payload"],
+            {"ctidTraderAccountId": 49216463, "positionId": 10, "volume": 1000},
+        )
+        self.assertEqual(result["positionId"], 10)
+        self.assertEqual(transport.payload_types()[-2:], [2124, 2111])
+
+    def test_close_position_partial_volume_and_refuses_oversize(self):
+        def scripted():
+            return FakeTransport(
+                auth_responses()
+                + [
+                    echo(
+                        2125,
+                        {
+                            "ctidTraderAccountId": 49216463,
+                            "position": [
+                                {
+                                    "positionId": 10,
+                                    "positionStatus": "POSITION_STATUS_OPEN",
+                                    "tradeData": {"volume": 1000},
+                                }
+                            ],
+                        },
+                    ),
+                    echo(
+                        2126,
+                        {
+                            "ctidTraderAccountId": 49216463,
+                            "executionType": 2,
+                            "position": {"positionId": 10},
+                        },
+                    ),
+                ]
+            )
+
+        transport = scripted()
+        client = DemoClient(trading_config(), transport)
+        client.connect()
+        client.authorize()
+        client.close_position(position_id=10, volume=400)
+        self.assertEqual(transport.sent[-1]["payload"]["volume"], 400)
+
+        oversized = scripted()
+        other = DemoClient(trading_config(), oversized)
+        other.connect()
+        other.authorize()
+        with self.assertRaises(ValueError):
+            other.close_position(position_id=10, volume=1001)
+        self.assertNotIn(2111, oversized.payload_types())
+
     def test_send_refuses_new_order_before_write(self):
         transport = FakeTransport([])
         client = DemoClient(trading_config(), transport)

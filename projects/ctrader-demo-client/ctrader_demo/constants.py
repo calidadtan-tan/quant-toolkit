@@ -74,9 +74,11 @@ ALLOWED_OUTGOING_PAYLOAD_TYPES = frozenset(
         PayloadType.APPLICATION_AUTH_REQ,
         PayloadType.ACCOUNT_AUTH_REQ,
         PayloadType.GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ,
+        PayloadType.NEW_ORDER_REQ,
         PayloadType.RECONCILE_REQ,
         PayloadType.GET_POSITION_UNREALIZED_PNL_REQ,
         PayloadType.AMEND_POSITION_SLTP_REQ,
+        PayloadType.CLOSE_POSITION_REQ,
     }
 )
 
@@ -91,10 +93,22 @@ ERROR_PAYLOAD_TYPES = frozenset(
 ACCOUNT_BOUND_PAYLOAD_TYPES = frozenset(
     {
         PayloadType.ACCOUNT_AUTH_REQ,
+        PayloadType.NEW_ORDER_REQ,
         PayloadType.RECONCILE_REQ,
         PayloadType.GET_POSITION_UNREALIZED_PNL_REQ,
         PayloadType.AMEND_POSITION_SLTP_REQ,
+        PayloadType.CLOSE_POSITION_REQ,
     }
+)
+
+# ProtoOAOrderType.MARKET and ProtoOATradeSide. Only market orders are sent.
+ORDER_TYPE_MARKET = 1
+TRADE_SIDE_BUY = 1
+TRADE_SIDE_SELL = 2
+MARKET_ORDER_TYPES = frozenset({1, "1", "MARKET"})
+TRADE_SIDE_VALUES = frozenset({1, "1", "BUY", 2, "2", "SELL"})
+NON_MARKET_ORDER_FIELDS = frozenset(
+    {"limitPrice", "stopPrice", "expirationTimestamp", "baseSlippagePrice", "slippageInPoints"}
 )
 
 EXECUTION_TYPE_NAMES = {

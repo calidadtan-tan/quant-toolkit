@@ -35,6 +35,13 @@ class BotArgumentParser(argparse.ArgumentParser):
         raise UsageError(message)
 
 
+def _trade_side(value: str) -> str:
+    text = value.strip().upper()
+    if text not in {"BUY", "SELL"}:
+        raise argparse.ArgumentTypeError("side must be BUY or SELL")
+    return text
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = BotArgumentParser(
         prog="python -m ctrader_demo",
@@ -51,6 +58,29 @@ def build_parser() -> argparse.ArgumentParser:
     amend.add_argument("--position-id", type=int, required=True)
     amend.add_argument("--stop-loss", type=float, default=None)
     amend.add_argument("--take-profit", type=float, default=None)
+
+    market = sub.add_parser(
+        "open-market",
+        help="Send ProtoOANewOrderReq as a MARKET order only",
+    )
+    market.add_argument("--symbol-id", type=int, required=True)
+    market.add_argument("--side", type=_trade_side, required=True)
+    market.add_argument("--volume", type=int, required=True, help="API volume; 1000 means 10.00 units")
+    market.add_argument("--stop-loss", type=float, default=None)
+    market.add_argument("--take-profit", type=float, default=None)
+    market.add_argument("--label", default=None)
+
+    close = sub.add_parser(
+        "close-position",
+        help="Close an open position with ProtoOAClosePositionReq",
+    )
+    close.add_argument("--position-id", type=int, required=True)
+    close.add_argument(
+        "--volume",
+        type=int,
+        default=None,
+        help="API volume to close; omit to close the full open volume",
+    )
 
     auth = sub.add_parser("auth-url", help="Print the Spotware OAuth authorize URL")
     auth.add_argument("--redirect-uri", default=None)
@@ -174,6 +204,17 @@ def execute(argv: list[str] | None = None, *, transport_factory=SslWebSocketTran
                         stop_loss=args.stop_loss,
                         take_profit=args.take_profit,
                     )
+                elif args.command == "open-market":
+                    result = client.open_market(
+                        symbol_id=args.symbol_id,
+                        side=args.side,
+                        volume=args.volume,
+                        stop_loss=args.stop_loss,
+                        take_profit=args.take_profit,
+                        label=args.label,
+                    )
+                elif args.command == "close-position":
+                    result = client.close_position(position_id=args.position_id, volume=args.volume)
                 else:
                     raise ConfigError(f"Unknown command {args.command}")
             finally:

@@ -31,15 +31,23 @@ Open API 應用程式名稱是 **poteto-demo-sltp**。Spotware 上的狀態是 *
 ```bash
 python3 -m ctrader_demo read-positions
 python3 -m ctrader_demo amend-sl --position-id 123456789 --stop-loss 1.08000 --take-profit 1.12000
+python3 -m ctrader_demo open-market --symbol-id 1 --side BUY --volume 1000 --stop-loss 1.08000 --take-profit 1.12000 --label demo
+python3 -m ctrader_demo close-position --position-id 123456789
+python3 -m ctrader_demo close-position --position-id 123456789 --volume 500
 ```
+
+`volume` 是 Open API 的口數單位：`1000` 表示 10.00 單位（協定以 0.01 單位計）。`open-market` 只送 `orderType=MARKET`（1）。限價、停損掛單、STOP_LIMIT 不會送出。省略 `close-position` 的 `--volume` 會先讀未平倉口數，再以 `ProtoOAClosePositionReq` 全部平倉；給了 `--volume` 則只平該口數，且不得大於持倉口數。
 
 程式進入點（不印出，直接回傳 dict）：
 
 ```python
-from ctrader_demo import read_positions, amend_sltp
+from ctrader_demo import read_positions, amend_sltp, open_market, close_position
 
 report = read_positions()
 report = amend_sltp(123456789, stop_loss=1.08, take_profit=1.12)
+report = open_market(1, "BUY", 1000, stop_loss=1.08, take_profit=1.12, label="demo")
+report = close_position(123456789)
+report = close_position(123456789, volume=500)
 ```
 
 `ctrader_demo.cli:main` 與 `python3 -m ctrader_demo` 相同。成功時 stdout 是一行 JSON，stderr 為空。失敗時 stdout 與 stderr 是同一行 JSON。bot 解析 `code` 與 `message` 即可。
@@ -73,7 +81,7 @@ report = amend_sltp(123456789, stop_loss=1.08, take_profit=1.12)
 | 登入號只能是 `5360748` | `CTRADER_ACCOUNT_ID` 是 cTrader 畫面登入號（`traderLogin`），不是 `ctidTraderAccountId`。缺失或不等於 `5360748` 就拒絕。 |
 | 只使用解析出的 ctid | 帳戶清單裡 `traderLogin == 5360748` 的那一筆提供 `ctidTraderAccountId`（實測與登入號不同，例如 `49216463`）。後續授權、讀倉、改停損只用這個 ctid。其他 ctid，即使數字剛好是 `5360748`，也不送。 |
 | 帳戶不得標成 Live | 該筆 `isLive` 為 true 時，在 `ProtoOAAccountAuthReq` 之前停止。 |
-| 不送出其他交易指令 | 允許的 `payloadType` 只有應用程式授權 `2100`、帳戶清單 `2149`、帳戶授權 `2102`、持倉對帳 `2124`、浮動損益 `2187`、修改停損停利 `2110`。新單、平倉、改掛單都會在寫入 socket 之前被拒絕。 |
+| 不送出其他交易指令 | 允許的 `payloadType` 是應用程式授權 `2100`、帳戶清單 `2149`、帳戶授權 `2102`、持倉對帳 `2124`、浮動損益 `2187`、市價新單 `2106`、修改停損停利 `2110`、平倉 `2111`。`2106` 只允許 `orderType=MARKET`。限價、停損掛單、取消掛單、修改掛單都會在寫入 socket 之前被拒絕。 |
 | 只讀權限不能改停損 | `permissionScope` 為 `SCOPE_VIEW` / `accounts` 時，不送 `2110`。 |
 | 秘密不進版本庫 | 憑證只從環境變數或 gitignore 的 `.env` 讀取。 |
 
