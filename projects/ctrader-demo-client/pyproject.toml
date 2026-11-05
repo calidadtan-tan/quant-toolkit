@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctrader-demo-client"
+version = "0.1.0"
+description = "DEMO-only cTrader Open API client bound to account 5360748 and demo.ctraderapi.com"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+ctrader-demo = "ctrader_demo.cli:console_main"
+
+[tool.setuptools.packages.find]
+include = ["ctrader_demo*"]
