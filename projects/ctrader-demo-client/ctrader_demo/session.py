@@ -8,14 +8,21 @@ from typing import Any, Iterable
 
 from ctrader_demo.config import TradingConfig
 from ctrader_demo.constants import (
-    ALLOWED_ACCOUNT_ID,
+    ALLOWED_TRADER_LOGIN,
     DEFAULT_TIMEOUT_SECONDS,
     ERROR_PAYLOAD_TYPES,
     VIEW_ONLY_SCOPES,
     PayloadType,
 )
 from ctrader_demo.errors import ApiError, DemoGuardError
-from ctrader_demo.guards import assert_account_id, guard_outgoing_envelope, is_live_flag
+from ctrader_demo.guards import (
+    assert_account_id,
+    assert_resolved_ctid,
+    ctid_of,
+    guard_outgoing_envelope,
+    is_live_flag,
+    trader_login_of,
+)
 from ctrader_demo.messages import (
     as_list,
     build_account_auth_req,
@@ -33,7 +40,7 @@ JsonObject = dict[str, Any]
 
 class DemoClient:
     def __init__(self, config: TradingConfig, transport: Any, timeout: float = DEFAULT_TIMEOUT_SECONDS):
-        if config.account_id != ALLOWED_ACCOUNT_ID:
+        if config.account_id != ALLOWED_TRADER_LOGIN:
             assert_account_id(config.account_id)
         if config.host != "demo.ctraderapi.com" or config.port != 5036:
             raise DemoGuardError(
@@ -43,6 +50,7 @@ class DemoClient:
         self.transport = transport
         self.timeout = timeout
         self.permission_scope: Any = None
+        self.ctid_trader_account_id: int | None = None
 
     def connect(self) -> None:
         if self.config.host != "demo.ctraderapi.com":
@@ -55,8 +63,16 @@ class DemoClient:
             closer()
 
     def send(self, envelope: JsonObject) -> None:
-        guard_outgoing_envelope(envelope)
+        guard_outgoing_envelope(envelope, resolved_ctid=self.ctid_trader_account_id)
         self.transport.send_text(json.dumps(envelope, separators=(",", ":"), ensure_ascii=False))
+
+    def _require_ctid(self) -> int:
+        if self.ctid_trader_account_id is None:
+            raise DemoGuardError(
+                "DEMO GUARD: refusing a trading request before DEMO trader login "
+                f"{ALLOWED_TRADER_LOGIN} was resolved to a ctidTraderAccountId."
+            )
+        return self.ctid_trader_account_id
 
     def request(self, envelope: JsonObject, *, expect: Iterable[int], require_account: bool) -> JsonObject:
         self.send(envelope)
@@ -110,24 +126,25 @@ class DemoClient:
         )
         self._accept_account_list(listed)
         authed = self.request(
-            build_account_auth_req(self.config.access_token),
+            build_account_auth_req(self.config.access_token, self._require_ctid()),
             expect={PayloadType.ACCOUNT_AUTH_RES},
             require_account=True,
         )
         self._require_response_account(authed, required=True)
 
     def read_positions(self) -> JsonObject:
+        ctid = self._require_ctid()
         reconcile = self.request(
-            build_reconcile_req(),
+            build_reconcile_req(ctid),
             expect={PayloadType.RECONCILE_RES},
             require_account=True,
         )
         pnl = self.request(
-            build_unrealized_pnl_req(),
+            build_unrealized_pnl_req(ctid),
             expect={PayloadType.GET_POSITION_UNREALIZED_PNL_RES},
             require_account=True,
         )
-        return normalize_open_positions(reconcile, pnl)
+        return normalize_open_positions(reconcile, pnl, expected_ctid=ctid)
 
     def amend_sltp(self, *, position_id: int, stop_loss: float | None, take_profit: float | None) -> JsonObject:
         if self.permission_scope in VIEW_ONLY_SCOPES:
@@ -135,7 +152,9 @@ class DemoClient:
                 "DEMO GUARD: access token scope is view-only (accounts). "
                 "Refusing to send ProtoOAAmendPositionSLTPReq. Re-authorize with scope=trading."
             )
+        ctid = self._require_ctid()
         envelope = build_amend_position_sltp_req(
+            ctid_trader_account_id=ctid,
             position_id=position_id,
             stop_loss=stop_loss,
             take_profit=take_profit,
@@ -145,33 +164,36 @@ class DemoClient:
             expect={PayloadType.EXECUTION_EVENT},
             require_account=True,
         )
-        return parse_amend_execution(event, requested_position_id=position_id)
+        return parse_amend_execution(event, requested_position_id=position_id, expected_ctid=ctid)
 
     def _accept_account_list(self, message: JsonObject) -> None:
         payload = message.get("payload") or {}
         self.permission_scope = payload.get("permissionScope")
-        match = None
+        matches: list[JsonObject] = []
         for account in as_list(payload.get("ctidTraderAccount")):
-            if not isinstance(account, dict) or "ctidTraderAccountId" not in account:
+            if not isinstance(account, dict):
                 continue
-            try:
-                account_id = int(account["ctidTraderAccountId"])
-            except (TypeError, ValueError):
+            if trader_login_of(account) != ALLOWED_TRADER_LOGIN:
                 continue
-            if account_id != ALLOWED_ACCOUNT_ID:
-                continue
-            match = account
-            break
-        if match is None:
+            matches.append(account)
+        if len(matches) != 1:
             raise DemoGuardError(
-                "DEMO GUARD: DEMO account 5360748 is not granted to this access token. "
-                "Refusing to authorize any other account."
+                f"DEMO GUARD: DEMO trader login {ALLOWED_TRADER_LOGIN} was not found exactly once "
+                "in the account list. Refusing to authorize any other ctidTraderAccountId."
             )
+        match = matches[0]
         if is_live_flag(match.get("isLive")):
             raise DemoGuardError(
-                "DEMO GUARD: account 5360748 is marked isLive=true. "
+                f"DEMO GUARD: DEMO trader login {ALLOWED_TRADER_LOGIN} is marked isLive=true. "
                 "Refusing before ProtoOAAccountAuthReq and before any trading request."
             )
+        ctid = ctid_of(match)
+        if ctid is None:
+            raise DemoGuardError(
+                f"DEMO GUARD: DEMO trader login {ALLOWED_TRADER_LOGIN} has no ctidTraderAccountId. "
+                "Refusing to authorize any other account."
+            )
+        self.ctid_trader_account_id = ctid
 
     def _require_response_account(self, message: JsonObject, *, required: bool) -> None:
         payload = message.get("payload") or {}
@@ -181,7 +203,7 @@ class DemoClient:
                     "DEMO GUARD: response omitted ctidTraderAccountId. Refusing to continue."
                 )
             return
-        assert_account_id(payload["ctidTraderAccountId"])
+        assert_resolved_ctid(payload["ctidTraderAccountId"], self._require_ctid())
 
     def _raise_api_error(self, message: JsonObject) -> None:
         payload = message.get("payload") or {}

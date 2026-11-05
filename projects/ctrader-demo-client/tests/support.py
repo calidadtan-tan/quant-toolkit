@@ -81,11 +81,30 @@ def echo(payload_type: int, payload: dict) -> dict:
     return {"clientMsgId": "<echo>", "payloadType": payload_type, "payload": payload}
 
 
+# Observed Open API id for DEMO login 5360748. Tests must not treat these as the same number.
+DEMO_CTID = 49216463
+
+
+def _fixture_login(account: dict) -> int | None:
+    for key in ("traderLogin", "login", "trader_login", "accountLogin"):
+        if key in account and account[key] is not None:
+            try:
+                return int(account[key])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def auth_responses(*, accounts: list[dict] | None = None, scope=1) -> list[dict]:
     if accounts is None:
-        accounts = [{"ctidTraderAccountId": 5360748, "isLive": False, "traderLogin": 5360748}]
+        accounts = [{"ctidTraderAccountId": DEMO_CTID, "isLive": False, "traderLogin": 5360748}]
+    auth_ctid = DEMO_CTID
+    for account in accounts:
+        if _fixture_login(account) == 5360748 and account.get("ctidTraderAccountId") is not None:
+            auth_ctid = int(account["ctidTraderAccountId"])
+            break
     return [
         echo(2101, {}),
         echo(2150, {"accessToken": "test-access-token", "permissionScope": scope, "ctidTraderAccount": accounts}),
-        echo(2103, {"ctidTraderAccountId": 5360748}),
+        echo(2103, {"ctidTraderAccountId": auth_ctid}),
     ]

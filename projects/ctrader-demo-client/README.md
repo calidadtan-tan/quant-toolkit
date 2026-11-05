@@ -70,8 +70,9 @@ report = amend_sltp(123456789, stop_loss=1.08, take_profit=1.12)
 | --- | --- |
 | 交易主機只能是 `demo.ctraderapi.com` | `CTRADER_HOST` 空白時用這個主機。設成別的值（包含 `live.ctraderapi.com`、`live1.p.ctrader.com`）立刻拒絕。 |
 | 連接埠只能是 `5036` | 這是 JSON 埠。Protobuf 的 `5035` 與任何 live 埠都會拒絕。 |
-| 帳戶只能是 `5360748` | `CTRADER_ACCOUNT_ID` 缺失或不等於 `5360748` 就拒絕。權杖若還授權了其他帳戶，那些帳戶不會被登入。 |
-| 帳戶不得標成 Live | `ProtoOAGetAccountListByAccessTokenRes` 裡若 `5360748` 的 `isLive` 為 true，在 `ProtoOAAccountAuthReq` 之前停止。 |
+| 登入號只能是 `5360748` | `CTRADER_ACCOUNT_ID` 是 cTrader 畫面登入號（`traderLogin`），不是 `ctidTraderAccountId`。缺失或不等於 `5360748` 就拒絕。 |
+| 只使用解析出的 ctid | 帳戶清單裡 `traderLogin == 5360748` 的那一筆提供 `ctidTraderAccountId`（實測與登入號不同，例如 `49216463`）。後續授權、讀倉、改停損只用這個 ctid。其他 ctid，即使數字剛好是 `5360748`，也不送。 |
+| 帳戶不得標成 Live | 該筆 `isLive` 為 true 時，在 `ProtoOAAccountAuthReq` 之前停止。 |
 | 不送出其他交易指令 | 允許的 `payloadType` 只有應用程式授權 `2100`、帳戶清單 `2149`、帳戶授權 `2102`、持倉對帳 `2124`、浮動損益 `2187`、修改停損停利 `2110`。新單、平倉、改掛單都會在寫入 socket 之前被拒絕。 |
 | 只讀權限不能改停損 | `permissionScope` 為 `SCOPE_VIEW` / `accounts` 時，不送 `2110`。 |
 | 秘密不進版本庫 | 憑證只從環境變數或 gitignore 的 `.env` 讀取。 |
@@ -151,7 +152,7 @@ python3 -m ctrader_demo refresh-token
 
 在 Applications 頁按 Playground，範圍選 **trading**，再按 Get token。把畫面上的 access token 與 refresh token 放進 `.env`。這只適合你自己的 cTID 做 DEMO 開發。
 
-此客戶端仍只接受帳戶 `5360748`。權杖的帳戶清單裡必須有這個 DEMO 帳戶，而且 `isLive` 不是 true。清單裡的其他帳戶不會被使用。
+此客戶端仍只接受 DEMO 登入號 `5360748`。權杖的帳戶清單裡必須有 `traderLogin == 5360748` 且 `isLive` 不是 true 的一筆。程式用那一筆的 `ctidTraderAccountId` 送後續請求。清單裡的其他帳戶不會被使用。`49216463` 只是曾經觀察到的 ctid 範例，不是寫死的第二個允許值。
 
 ## 環境變數
 
@@ -161,7 +162,7 @@ python3 -m ctrader_demo refresh-token
 | `CTRADER_CLIENT_SECRET` | 交易與換權杖時必填 | 應用程式 Client Secret。同上 |
 | `CTRADER_ACCESS_TOKEN` | 讀持倉、改停損時必填 | OAuth access token。Submitted 期間不存在 |
 | `CTRADER_REFRESH_TOKEN` | 只在 `refresh-token` 必填 | OAuth refresh token。Submitted 期間不存在 |
-| `CTRADER_ACCOUNT_ID` | 永遠必填 | 只能是 `5360748` |
+| `CTRADER_ACCOUNT_ID` | 永遠必填 | DEMO 登入號 `traderLogin`，只能是 `5360748`。不是 `ctidTraderAccountId` |
 | `CTRADER_HOST` | 否 | 省略時為 `demo.ctraderapi.com`。其他值會被拒絕 |
 | `CTRADER_REDIRECT_URI` | 否 | 省略時為 `https://localhost`。其他值會被拒絕 |
 
@@ -177,8 +178,8 @@ python3 -m ctrader_demo read-positions
 流程是：
 
 1. `ProtoOAApplicationAuthReq`（2100）
-2. `ProtoOAGetAccountListByAccessTokenReq`（2149），確認 `5360748` 且不是 Live
-3. `ProtoOAAccountAuthReq`（2102），帳戶 id 固定為 `5360748`
+2. `ProtoOAGetAccountListByAccessTokenReq`（2149），找到 `traderLogin == 5360748` 且不是 Live，記下該筆 `ctidTraderAccountId`
+3. `ProtoOAAccountAuthReq`（2102），`ctidTraderAccountId` 用上一步解析出的值，不是 `5360748`
 4. `ProtoOAReconcileReq`（2124），`returnProtectionOrders` 為 false，停損停利取自持倉本身
 5. `ProtoOAGetPositionUnrealizedPnLReq`（2187）
 
@@ -207,14 +208,14 @@ python3 -m ctrader_demo amend-sl --position-id 123456789 --stop-loss 1.08000 --t
 python3 -m ctrader_demo amend-sl --position-id 123456789 --stop-loss 1.08000
 ```
 
-送出的 JSON 形狀：
+送出的 JSON 形狀。`ctidTraderAccountId` 是帳戶清單解析出的值；下面的 `49216463` 只是實測範例，不是寫死的允許清單：
 
 ```json
 {
   "clientMsgId": "<uuid>",
   "payloadType": 2110,
   "payload": {
-    "ctidTraderAccountId": 5360748,
+    "ctidTraderAccountId": 49216463,
     "positionId": 123456789,
     "stopLoss": 1.08,
     "takeProfit": 1.12
@@ -272,4 +273,4 @@ Spotware 的官方 Python SDK 是 [OpenApiPy](https://github.com/spotware/OpenAp
 - `CTRADER_ACCESS_TOKEN`
 - `CTRADER_REFRESH_TOKEN`（刷新時需要；第一次可用授權碼交換）
 
-`CTRADER_ACCOUNT_ID` 必須維持 `5360748`。`CTRADER_HOST` 必須是 `demo.ctraderapi.com`。`CTRADER_REDIRECT_URI` 必須是 `https://localhost`。
+`CTRADER_ACCOUNT_ID` 必須維持 `5360748`（DEMO 登入號 `traderLogin`）。`CTRADER_HOST` 必須是 `demo.ctraderapi.com`。`CTRADER_REDIRECT_URI` 必須是 `https://localhost`。Open API 的 `ctidTraderAccountId` 由帳戶清單解析，不要把它填成 `5360748`。

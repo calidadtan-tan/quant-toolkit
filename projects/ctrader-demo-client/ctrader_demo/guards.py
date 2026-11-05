@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from ctrader_demo.constants import (
     ACCOUNT_BOUND_PAYLOAD_TYPES,
-    ALLOWED_ACCOUNT_ID,
     ALLOWED_HOST,
     ALLOWED_JSON_PORT,
     ALLOWED_OUTGOING_PAYLOAD_TYPES,
+    ALLOWED_TRADER_LOGIN,
     FORBIDDEN_HOST_MARKERS,
+    LOGIN_FIELD_NAMES,
 )
 from ctrader_demo.errors import DemoGuardError
 
@@ -63,27 +64,80 @@ def assert_demo_port(port: int | str) -> int:
     return value
 
 
-def assert_account_id(account_id: int | str) -> int:
-    """Accept only DEMO account 5360748."""
-
-    if isinstance(account_id, bool) or isinstance(account_id, float):
+def _parse_strict_int(value: object, *, what: str) -> int:
+    if isinstance(value, bool) or isinstance(value, float):
         raise DemoGuardError(
-            f"DEMO GUARD: refusing accountId {account_id!r}. "
-            "This client is bound to DEMO account 5360748 only."
+            f"DEMO GUARD: refusing {what} {value!r}. "
+            f"This client is bound to DEMO trader login {ALLOWED_TRADER_LOGIN} only."
         )
     try:
-        value = int(account_id)
+        return int(str(value).strip())
     except (TypeError, ValueError) as exc:
         raise DemoGuardError(
-            f"DEMO GUARD: refusing accountId {account_id!r}. "
-            "This client is bound to DEMO account 5360748 only."
+            f"DEMO GUARD: refusing {what} {value!r}. "
+            f"This client is bound to DEMO trader login {ALLOWED_TRADER_LOGIN} only."
         ) from exc
-    if value != ALLOWED_ACCOUNT_ID:
+
+
+def assert_account_id(account_id: int | str) -> int:
+    """Accept only DEMO trader login 5360748.
+
+    ``CTRADER_ACCOUNT_ID`` is the cTrader login (``traderLogin``), not
+    ``ctidTraderAccountId``.
+    """
+
+    value = _parse_strict_int(account_id, what="accountId")
+    if value != ALLOWED_TRADER_LOGIN:
         raise DemoGuardError(
             f"DEMO GUARD: refusing accountId {value}. "
-            "This client is bound to DEMO account 5360748 only and will not "
+            f"This client is bound to DEMO trader login {ALLOWED_TRADER_LOGIN} only and will not "
             "send trading requests for any other account."
         )
+    return value
+
+
+def assert_resolved_ctid(ctid: object, expected: int) -> int:
+    """Accept only the ctid resolved from DEMO trader login 5360748."""
+
+    if expected <= 0:
+        raise DemoGuardError(
+            "DEMO GUARD: refusing to send a trading request before DEMO trader login "
+            f"{ALLOWED_TRADER_LOGIN} was resolved to a ctidTraderAccountId."
+        )
+    value = _parse_strict_int(ctid, what="ctidTraderAccountId")
+    if value != expected:
+        raise DemoGuardError(
+            f"DEMO GUARD: refusing ctidTraderAccountId {value}. "
+            f"This process may only use ctid {expected}, resolved from DEMO trader login "
+            f"{ALLOWED_TRADER_LOGIN}."
+        )
+    return value
+
+
+def trader_login_of(account: dict) -> int | None:
+    """Read traderLogin, or a fixture alias, from one account-list entry."""
+
+    if not isinstance(account, dict):
+        return None
+    for key in LOGIN_FIELD_NAMES:
+        if key not in account or account[key] is None:
+            continue
+        try:
+            return _parse_strict_int(account[key], what=key)
+        except DemoGuardError:
+            return None
+    return None
+
+
+def ctid_of(account: dict) -> int | None:
+    if not isinstance(account, dict) or "ctidTraderAccountId" not in account:
+        return None
+    try:
+        value = _parse_strict_int(account["ctidTraderAccountId"], what="ctidTraderAccountId")
+    except DemoGuardError:
+        return None
+    if value <= 0:
+        return None
     return value
 
 
@@ -97,10 +151,11 @@ def is_live_flag(value: object) -> bool:
     return False
 
 
-def guard_outgoing_envelope(envelope: dict) -> None:
-    """Reject anything that is not a demo read or SL/TP amend for 5360748.
+def guard_outgoing_envelope(envelope: dict, *, resolved_ctid: int | None) -> None:
+    """Reject anything that is not a demo read or SL/TP amend for the resolved ctid.
 
-    Called immediately before the frame is written to the socket.
+    Account-bound payloads must use the ``ctidTraderAccountId`` resolved from
+    DEMO trader login 5360748. Called immediately before the frame is written.
     """
 
     if not isinstance(envelope, dict):
@@ -113,16 +168,19 @@ def guard_outgoing_envelope(envelope: dict) -> None:
         raise DemoGuardError(
             f"DEMO GUARD: refusing payloadType {payload_type}. "
             "This client may only authorize, read positions, read floating P&L, "
-            "and send ProtoOAAmendPositionSLTPReq (2110) for DEMO account 5360748."
+            f"and send ProtoOAAmendPositionSLTPReq (2110) for DEMO trader login {ALLOWED_TRADER_LOGIN}."
         )
     payload = envelope.get("payload") or {}
     if not isinstance(payload, dict):
         raise DemoGuardError("DEMO GUARD: outgoing payload must be an object.")
-    if payload_type in ACCOUNT_BOUND_PAYLOAD_TYPES:
+    if payload_type in ACCOUNT_BOUND_PAYLOAD_TYPES or "ctidTraderAccountId" in payload:
+        if resolved_ctid is None:
+            raise DemoGuardError(
+                "DEMO GUARD: refusing ctidTraderAccountId before DEMO trader login "
+                f"{ALLOWED_TRADER_LOGIN} was resolved from the account list."
+            )
         if "ctidTraderAccountId" not in payload:
             raise DemoGuardError(
                 f"DEMO GUARD: payloadType {payload_type} is missing ctidTraderAccountId."
             )
-        assert_account_id(payload["ctidTraderAccountId"])
-    elif "ctidTraderAccountId" in payload:
-        assert_account_id(payload["ctidTraderAccountId"])
+        assert_resolved_ctid(payload["ctidTraderAccountId"], resolved_ctid)

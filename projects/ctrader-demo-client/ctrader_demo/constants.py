@@ -6,8 +6,12 @@ https://github.com/spotware/openapi-proto-messages
 
 ALLOWED_HOST = "demo.ctraderapi.com"
 ALLOWED_JSON_PORT = 5036
-ALLOWED_ACCOUNT_ID = 5360748
+# cTrader UI / DEMO account login. This is ProtoOACtidTraderAccount.traderLogin,
+# not ctidTraderAccountId. The API id is resolved from the account list.
+ALLOWED_TRADER_LOGIN = 5360748
+ALLOWED_ACCOUNT_ID = ALLOWED_TRADER_LOGIN
 ALLOWED_REDIRECT_URI = "https://localhost"
+LOGIN_FIELD_NAMES = ("traderLogin", "login", "trader_login", "accountLogin")
 
 # Spotware Open API application. Status is Submitted, not Active, so OAuth
 # tokens do not exist yet. Never hardcode the client id, secret, or tokens.

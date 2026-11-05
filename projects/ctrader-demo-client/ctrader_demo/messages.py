@@ -13,8 +13,8 @@ from decimal import Decimal
 from typing import Any
 
 from ctrader_demo.constants import (
-    ALLOWED_ACCOUNT_ID,
     ALLOWED_HOST,
+    ALLOWED_TRADER_LOGIN,
     DEMO_WEBSOCKET_URL,
     EXECUTION_TYPE_NAMES,
     OPEN_POSITION_STATUSES,
@@ -24,7 +24,7 @@ from ctrader_demo.constants import (
     PayloadType,
 )
 from ctrader_demo.errors import ApiError
-from ctrader_demo.guards import assert_account_id
+from ctrader_demo.guards import assert_resolved_ctid
 
 JsonObject = dict[str, Any]
 
@@ -61,34 +61,43 @@ def build_account_list_req(access_token: str, client_msg_id: str | None = None) 
     )
 
 
-def build_account_auth_req(access_token: str, client_msg_id: str | None = None) -> JsonObject:
-    assert_account_id(ALLOWED_ACCOUNT_ID)
+def require_ctid(ctid_trader_account_id: int) -> int:
+    if isinstance(ctid_trader_account_id, bool) or not isinstance(ctid_trader_account_id, int):
+        raise ValueError("ctidTraderAccountId must be a positive integer")
+    if ctid_trader_account_id <= 0:
+        raise ValueError("ctidTraderAccountId must be a positive integer")
+    return ctid_trader_account_id
+
+
+def build_account_auth_req(
+    access_token: str,
+    ctid_trader_account_id: int,
+    client_msg_id: str | None = None,
+) -> JsonObject:
     if not access_token:
         raise ValueError("accessToken is required")
     return envelope(
         PayloadType.ACCOUNT_AUTH_REQ,
-        {"ctidTraderAccountId": ALLOWED_ACCOUNT_ID, "accessToken": access_token},
+        {"ctidTraderAccountId": require_ctid(ctid_trader_account_id), "accessToken": access_token},
         client_msg_id,
     )
 
 
-def build_reconcile_req(client_msg_id: str | None = None) -> JsonObject:
-    assert_account_id(ALLOWED_ACCOUNT_ID)
+def build_reconcile_req(ctid_trader_account_id: int, client_msg_id: str | None = None) -> JsonObject:
     return envelope(
         PayloadType.RECONCILE_REQ,
         {
-            "ctidTraderAccountId": ALLOWED_ACCOUNT_ID,
+            "ctidTraderAccountId": require_ctid(ctid_trader_account_id),
             "returnProtectionOrders": False,
         },
         client_msg_id,
     )
 
 
-def build_unrealized_pnl_req(client_msg_id: str | None = None) -> JsonObject:
-    assert_account_id(ALLOWED_ACCOUNT_ID)
+def build_unrealized_pnl_req(ctid_trader_account_id: int, client_msg_id: str | None = None) -> JsonObject:
     return envelope(
         PayloadType.GET_POSITION_UNREALIZED_PNL_REQ,
-        {"ctidTraderAccountId": ALLOWED_ACCOUNT_ID},
+        {"ctidTraderAccountId": require_ctid(ctid_trader_account_id)},
         client_msg_id,
     )
 
@@ -110,6 +119,7 @@ def require_price(name: str, value: float) -> float:
 
 def build_amend_position_sltp_req(
     *,
+    ctid_trader_account_id: int,
     position_id: int,
     stop_loss: float | None = None,
     take_profit: float | None = None,
@@ -118,17 +128,16 @@ def build_amend_position_sltp_req(
     """``ProtoOAAmendPositionSLTPReq`` (payloadType 2110).
 
     At least one of stop loss or take profit is required. Prices are absolute,
-    as in the official examples (``1.23456``). The account id is not a parameter:
-    it is always 5360748.
+    as in the official examples (``1.23456``). ``ctid_trader_account_id`` is the
+    id resolved from DEMO trader login 5360748, not the login itself.
     """
 
-    assert_account_id(ALLOWED_ACCOUNT_ID)
     if stop_loss is None and take_profit is None:
         raise ValueError(
             "Provide stopLoss and/or takeProfit. Refusing to send an empty ProtoOAAmendPositionSLTPReq."
         )
     payload: JsonObject = {
-        "ctidTraderAccountId": ALLOWED_ACCOUNT_ID,
+        "ctidTraderAccountId": require_ctid(ctid_trader_account_id),
         "positionId": require_position_id(position_id),
     }
     if stop_loss is not None:
@@ -197,13 +206,28 @@ def _is_open_status(status: Any) -> bool:
     return False
 
 
-def normalize_open_positions(reconcile: JsonObject, pnl_message: JsonObject) -> JsonObject:
+def _bound_account(ctid: int) -> JsonObject:
+    return {
+        "accountId": ALLOWED_TRADER_LOGIN,
+        "traderLogin": ALLOWED_TRADER_LOGIN,
+        "ctidTraderAccountId": ctid,
+        "host": ALLOWED_HOST,
+        "endpoint": DEMO_WEBSOCKET_URL,
+    }
+
+
+def normalize_open_positions(
+    reconcile: JsonObject,
+    pnl_message: JsonObject,
+    *,
+    expected_ctid: int,
+) -> JsonObject:
     """Merge ``ProtoOAReconcileRes`` with ``ProtoOAGetPositionUnrealizedPnLRes``."""
 
     reconcile_payload = reconcile.get("payload") or {}
     pnl_payload = pnl_message.get("payload") or {}
-    assert_account_id(reconcile_payload.get("ctidTraderAccountId"))
-    assert_account_id(pnl_payload.get("ctidTraderAccountId"))
+    ctid = assert_resolved_ctid(reconcile_payload.get("ctidTraderAccountId"), expected_ctid)
+    assert_resolved_ctid(pnl_payload.get("ctidTraderAccountId"), expected_ctid)
     if "moneyDigits" not in pnl_payload:
         raise ApiError(
             "MISSING_MONEY_DIGITS",
@@ -256,9 +280,7 @@ def normalize_open_positions(reconcile: JsonObject, pnl_message: JsonObject) -> 
             }
         )
     return {
-        "accountId": ALLOWED_ACCOUNT_ID,
-        "host": ALLOWED_HOST,
-        "endpoint": DEMO_WEBSOCKET_URL,
+        **_bound_account(ctid),
         "positionCount": len(positions),
         "positions": positions,
     }
@@ -270,9 +292,14 @@ def execution_name(value: Any) -> str:
     return enum_name(value, EXECUTION_TYPE_NAMES)
 
 
-def parse_amend_execution(message: JsonObject, *, requested_position_id: int) -> JsonObject:
+def parse_amend_execution(
+    message: JsonObject,
+    *,
+    requested_position_id: int,
+    expected_ctid: int,
+) -> JsonObject:
     payload = message.get("payload") or {}
-    assert_account_id(payload.get("ctidTraderAccountId", ALLOWED_ACCOUNT_ID))
+    ctid = assert_resolved_ctid(payload.get("ctidTraderAccountId"), expected_ctid)
     name = execution_name(payload.get("executionType"))
     error_code = payload.get("errorCode") or None
     if error_code or name in REJECTED_EXECUTION_TYPES:
@@ -281,9 +308,7 @@ def parse_amend_execution(message: JsonObject, *, requested_position_id: int) ->
     position = payload.get("position") or {}
     position_id = position.get("positionId", requested_position_id)
     return {
-        "accountId": ALLOWED_ACCOUNT_ID,
-        "host": ALLOWED_HOST,
-        "endpoint": DEMO_WEBSOCKET_URL,
+        **_bound_account(ctid),
         "positionId": int(position_id),
         "executionType": name,
         "stopLoss": position.get("stopLoss"),

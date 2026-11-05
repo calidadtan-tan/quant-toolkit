@@ -78,17 +78,47 @@ class GuardTests(unittest.TestCase):
             with self.subTest(payload_type=payload_type):
                 with self.assertRaises(DemoGuardError):
                     guard_outgoing_envelope(
-                        {"clientMsgId": "x", "payloadType": payload_type, "payload": payload}
+                        {"clientMsgId": "x", "payloadType": payload_type, "payload": payload},
+                        resolved_ctid=None,
                     )
 
     def test_amend_for_other_account_refused(self):
+        resolved = 49216463
         with self.assertRaises(DemoGuardError):
             guard_outgoing_envelope(
                 {
                     "clientMsgId": "x",
                     "payloadType": PayloadType.AMEND_POSITION_SLTP_REQ,
                     "payload": {"ctidTraderAccountId": 1, "positionId": 9, "stopLoss": 1.2},
-                }
+                },
+                resolved_ctid=resolved,
+            )
+        with self.assertRaises(DemoGuardError) as caught:
+            guard_outgoing_envelope(
+                {
+                    "clientMsgId": "x",
+                    "payloadType": PayloadType.AMEND_POSITION_SLTP_REQ,
+                    "payload": {"ctidTraderAccountId": 5360748, "positionId": 9, "stopLoss": 1.2},
+                },
+                resolved_ctid=resolved,
+            )
+        self.assertIn("49216463", str(caught.exception))
+        guard_outgoing_envelope(
+            {
+                "clientMsgId": "x",
+                "payloadType": PayloadType.AMEND_POSITION_SLTP_REQ,
+                "payload": {"ctidTraderAccountId": resolved, "positionId": 9, "stopLoss": 1.2},
+            },
+            resolved_ctid=resolved,
+        )
+        with self.assertRaises(DemoGuardError):
+            guard_outgoing_envelope(
+                {
+                    "clientMsgId": "x",
+                    "payloadType": PayloadType.AMEND_POSITION_SLTP_REQ,
+                    "payload": {"ctidTraderAccountId": resolved, "positionId": 9, "stopLoss": 1.2},
+                },
+                resolved_ctid=None,
             )
 
     def test_env_live_host_exits_before_socket(self):

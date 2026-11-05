@@ -42,7 +42,7 @@ class CliTests(unittest.TestCase):
                 echo(
                     2125,
                     {
-                        "ctidTraderAccountId": 5360748,
+                        "ctidTraderAccountId": 49216463,
                         "position": [
                             {
                                 "positionId": 10,
@@ -59,7 +59,7 @@ class CliTests(unittest.TestCase):
                 echo(
                     2188,
                     {
-                        "ctidTraderAccountId": 5360748,
+                        "ctidTraderAccountId": 49216463,
                         "moneyDigits": 2,
                         "positionUnrealizedPnL": [
                             {"positionId": 10, "grossUnrealizedPnL": 250, "netUnrealizedPnL": 200}
@@ -146,8 +146,8 @@ class CliTests(unittest.TestCase):
         transport = FakeTransport(
             auth_responses()
             + [
-                echo(2125, {"ctidTraderAccountId": 5360748, "position": []}),
-                echo(2188, {"ctidTraderAccountId": 5360748, "moneyDigits": 2, "positionUnrealizedPnL": []}),
+                echo(2125, {"ctidTraderAccountId": 49216463, "position": []}),
+                echo(2188, {"ctidTraderAccountId": 49216463, "moneyDigits": 2, "positionUnrealizedPnL": []}),
             ]
         )
         with env(

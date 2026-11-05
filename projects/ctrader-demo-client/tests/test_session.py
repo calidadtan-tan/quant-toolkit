@@ -11,7 +11,7 @@ def _open_position_responses():
         echo(
             2125,
             {
-                "ctidTraderAccountId": 5360748,
+                "ctidTraderAccountId": 49216463,
                 "position": [
                     {
                         "positionId": 10,
@@ -29,7 +29,7 @@ def _open_position_responses():
         echo(
             2188,
             {
-                "ctidTraderAccountId": 5360748,
+                "ctidTraderAccountId": 49216463,
                 "moneyDigits": 2,
                 "positionUnrealizedPnL": [
                     {"positionId": 10, "grossUnrealizedPnL": 150, "netUnrealizedPnL": 125}
@@ -58,13 +58,56 @@ class SessionTests(unittest.TestCase):
             for message in transport.sent
             if "ctidTraderAccountId" in message["payload"]
         ]
-        self.assertEqual(sent_accounts, [5360748, 5360748, 5360748])
+        self.assertEqual(sent_accounts, [49216463, 49216463, 49216463])
+        self.assertEqual(result["traderLogin"], 5360748)
+        self.assertEqual(result["ctidTraderAccountId"], 49216463)
         client.close()
         self.assertTrue(transport.closed)
 
+    def test_login_5360748_resolves_to_different_ctid(self):
+        """5360748 is traderLogin. The API id is a different ctidTraderAccountId.
+
+        An entry whose ctid equals the login but whose traderLogin does not
+        must not be authorized.
+        """
+
+        transport = FakeTransport(
+            auth_responses(
+                accounts=[
+                    {"ctidTraderAccountId": 5360748, "traderLogin": 999001, "isLive": False},
+                    {"ctidTraderAccountId": 49216463, "traderLogin": 5360748, "isLive": False},
+                ]
+            )
+            + [
+                echo(2125, {"ctidTraderAccountId": 49216463, "position": []}),
+                echo(
+                    2188,
+                    {"ctidTraderAccountId": 49216463, "moneyDigits": 2, "positionUnrealizedPnL": []},
+                ),
+            ]
+        )
+        client = DemoClient(trading_config(), transport)
+        client.connect()
+        client.authorize()
+        result = client.read_positions()
+        account_auth = transport.sent[2]
+        self.assertEqual(account_auth["payloadType"], 2102)
+        self.assertEqual(account_auth["payload"]["ctidTraderAccountId"], 49216463)
+        sent_ctids = [
+            message["payload"].get("ctidTraderAccountId")
+            for message in transport.sent
+            if "ctidTraderAccountId" in message["payload"]
+        ]
+        self.assertEqual(sent_ctids, [49216463, 49216463, 49216463])
+        self.assertNotIn(5360748, sent_ctids)
+        self.assertEqual(result["traderLogin"], 5360748)
+        self.assertEqual(result["ctidTraderAccountId"], 49216463)
+
     def test_live_flag_stops_before_account_auth(self):
         transport = FakeTransport(
-            auth_responses(accounts=[{"ctidTraderAccountId": 5360748, "isLive": True}])[:2]
+            auth_responses(
+                accounts=[{"ctidTraderAccountId": 49216463, "traderLogin": 5360748, "isLive": True}]
+            )[:2]
         )
         client = DemoClient(trading_config(), transport)
         client.connect()
@@ -80,8 +123,8 @@ class SessionTests(unittest.TestCase):
         transport = FakeTransport(
             auth_responses(
                 accounts=[
-                    {"ctidTraderAccountId": 999001, "isLive": False},
-                    {"ctidTraderAccountId": 999002, "isLive": True},
+                    {"ctidTraderAccountId": 999001, "traderLogin": 111, "isLive": False},
+                    {"ctidTraderAccountId": 5360748, "traderLogin": 222, "isLive": True},
                 ]
             )[:2]
         )
@@ -95,8 +138,8 @@ class SessionTests(unittest.TestCase):
         transport = FakeTransport(
             auth_responses(
                 accounts=[
-                    {"ctidTraderAccountId": 999002, "isLive": True},
-                    {"ctidTraderAccountId": 5360748, "isLive": False},
+                    {"ctidTraderAccountId": 999002, "traderLogin": 111, "isLive": True},
+                    {"ctidTraderAccountId": 49216463, "login": 5360748, "isLive": False},
                 ]
             )
         )
@@ -105,7 +148,7 @@ class SessionTests(unittest.TestCase):
         client.authorize()
         account_auth = transport.sent[2]
         self.assertEqual(account_auth["payloadType"], 2102)
-        self.assertEqual(account_auth["payload"]["ctidTraderAccountId"], 5360748)
+        self.assertEqual(account_auth["payload"]["ctidTraderAccountId"], 49216463)
 
     def test_reconcile_account_mismatch_does_not_request_pnl(self):
         transport = FakeTransport(
@@ -136,7 +179,7 @@ class SessionTests(unittest.TestCase):
                 echo(
                     2126,
                     {
-                        "ctidTraderAccountId": 5360748,
+                        "ctidTraderAccountId": 49216463,
                         "executionType": 2,
                         "position": {"positionId": 10, "stopLoss": 1.05, "takeProfit": 1.25},
                     },
@@ -152,7 +195,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(
             amend["payload"],
             {
-                "ctidTraderAccountId": 5360748,
+                "ctidTraderAccountId": 49216463,
                 "positionId": 10,
                 "stopLoss": 1.05,
                 "takeProfit": 1.25,
